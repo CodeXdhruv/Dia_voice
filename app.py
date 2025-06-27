@@ -430,7 +430,7 @@ curl -X POST https://diavoice.onrender.com/terminate_voice</pre>
     </ul>
     
     <footer>
-        <p>Made with 💜 for mental wellness | DIA Voice Therapy</p>
+        <p>🍉DIA Voice Therapy🍉</p>
         <p><small>Remember: You are worthy of care, support, and healing. 🌸</small></p>
     </footer>
     
