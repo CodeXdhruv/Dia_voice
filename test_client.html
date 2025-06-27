@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DIA Voice Therapy Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2rem;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin: 2rem 0;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .primary { background: #6366f1; color: white; }
+        .primary:hover { background: #5b21b6; transform: translateY(-2px); }
+        .secondary { background: #f59e0b; color: white; }
+        .secondary:hover { background: #d97706; transform: translateY(-2px); }
+        .danger { background: #ef4444; color: white; }
+        .danger:hover { background: #dc2626; transform: translateY(-2px); }
+        .status {
+            text-align: center;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.2);
+        }
+        .audio-controls {
+            display: none;
+            gap: 1rem;
+            justify-content: center;
+            margin: 1rem 0;
+        }
+        .audio-controls.active { display: flex; }
+        #audioPlayback {
+            width: 100%;
+            margin: 1rem 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌸 DIA Therapy Test Client</h1>
+        
+        <div class="controls">
+            <button class="primary" onclick="startTherapy()">Start Therapy Session</button>
+            <button class="secondary" onclick="checkStatus()">Check Status</button>
+            <button class="danger" onclick="endTherapy()">End Session</button>
+        </div>
+        
+        <div class="audio-controls" id="audioControls">
+            <button class="primary" onclick="startRecording()">🎤 Start Talking</button>
+            <button class="secondary" onclick="stopRecording()">⏹️ Stop Talking</button>
+        </div>
+        
+        <div class="status" id="status">
+            Ready to connect to DIA Therapist
+        </div>
+        
+        <audio id="audioPlayback" controls style="display: none;"></audio>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000'; // Change this to your deployed URL
+        let websocket = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        
+        function updateStatus(message, type = 'info') {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.style.background = type === 'error' ? 'rgba(239, 68, 68, 0.3)' : 
+                                     type === 'success' ? 'rgba(34, 197, 94, 0.3)' : 
+                                     'rgba(255, 255, 255, 0.2)';
+        }
+        
+        async function checkStatus() {
+            try {
+                const response = await fetch(`${API_URL}/status`);
+                const data = await response.json();
+                updateStatus(`API Status: ${data.status} | Version: ${data.version}`, 'success');
+            } catch (error) {
+                updateStatus(`Error checking status: ${error.message}`, 'error');
+            }
+        }
+        
+        async function startTherapy() {
+            try {
+                updateStatus('Starting therapy session...');
+                
+                const response = await fetch(`${API_URL}/start_voice`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'started') {
+                    // Connect to WebSocket
+                    const wsUrl = data.websocket.url.replace('wss://', 'ws://').replace('https://', 'ws://');
+                    websocket = new WebSocket(wsUrl);
+                    
+                    websocket.onopen = () => {
+                        updateStatus('Connected to DIA Therapist! Ready to talk.', 'success');
+                        document.getElementById('audioControls').classList.add('active');
+                    };
+                    
+                    websocket.onmessage = (event) => {
+                        const message = JSON.parse(event.data);
+                        if (message.type === 'audio') {
+                            playTherapistResponse(message.data);
+                        }
+                    };
+                    
+                    websocket.onclose = () => {
+                        updateStatus('Disconnected from DIA Therapist');
+                        document.getElementById('audioControls').classList.remove('active');
+                    };
+                    
+                    websocket.onerror = (error) => {
+                        updateStatus('WebSocket error occurred', 'error');
+                        console.error('WebSocket error:', error);
+                    };
+                } else {
+                    updateStatus(`Unexpected response: ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (error) {
+                updateStatus(`Error starting therapy: ${error.message}`, 'error');
+                console.error('Error:', error);
+            }
+        }
+        
+        async function endTherapy() {
+            try {
+                if (websocket) {
+                    websocket.close();
+                    websocket = null;
+                }
+                
+                const response = await fetch(`${API_URL}/terminate_voice`, {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                updateStatus('Therapy session ended. Take care! 🌸', 'success');
+                document.getElementById('audioControls').classList.remove('active');
+            } catch (error) {
+                updateStatus(`Error ending therapy: ${error.message}`, 'error');
+            }
+        }
+        
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    } 
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm'
+                });
+                
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+                
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    sendAudioToTherapist(audioBlob);
+                    stream.getTracks().forEach(track => track.stop());
+                };
+                
+                mediaRecorder.start();
+                updateStatus('🎤 Listening... Speak to DIA Therapist', 'success');
+                
+            } catch (error) {
+                updateStatus(`Microphone error: ${error.message}`, 'error');
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                updateStatus('Processing your message...');
+            }
+        }
+        
+        async function sendAudioToTherapist(audioBlob) {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                try {
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                    
+                    websocket.send(JSON.stringify({
+                        type: 'audio',
+                        format: 'audio/webm',
+                        data: base64Audio
+                    }));
+                    
+                    updateStatus('Message sent to DIA Therapist. Waiting for response...');
+                } catch (error) {
+                    updateStatus(`Error sending audio: ${error.message}`, 'error');
+                }
+            } else {
+                updateStatus('Not connected to DIA Therapist', 'error');
+            }
+        }
+        
+        function playTherapistResponse(base64Audio) {
+            try {
+                const audioBytes = atob(base64Audio);
+                const audioArray = new Uint8Array(audioBytes.length);
+                for (let i = 0; i < audioBytes.length; i++) {
+                    audioArray[i] = audioBytes.charCodeAt(i);
+                }
+                
+                const audioBlob = new Blob([audioArray], { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                const audio = document.getElementById('audioPlayback');
+                audio.src = audioUrl;
+                audio.style.display = 'block';
+                audio.play();
+                
+                updateStatus('🎵 DIA Therapist is responding...', 'success');
+                
+                audio.onended = () => {
+                    updateStatus('Ready for your next message', 'success');
+                    URL.revokeObjectURL(audioUrl);
+                };
+                
+            } catch (error) {
+                updateStatus(`Error playing response: ${error.message}`, 'error');
+            }
+        }
+        
+        // Initialize
+        checkStatus();
+    </script>
+</body>
+</html>
